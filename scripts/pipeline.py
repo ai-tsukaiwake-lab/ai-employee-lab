@@ -67,18 +67,42 @@ def call_ai(key, model, prompt, temperature=0.25):
 
 
 def parse_json(text):
+    """Parse a model-produced JSON object; tolerate literal newlines in strings."""
     clean = text.strip()
-    clean = re.sub(r'^```(?:json)?\s*', '', clean)
+    clean = re.sub(r'^```(?:json)?\s*', '', clean, flags=re.IGNORECASE)
     clean = re.sub(r'\s*```$', '', clean)
-    result = json.loads(clean)
+    # strict=False accepts raw control characters such as newline inside JSON strings.
+    # A schema validation still runs after this parser; malformed structures are rejected.
+    result = json.loads(clean, strict=False)
     if not isinstance(result, dict):
         raise ValueError('AI did not return a JSON object')
     return result
 
 
 def invoke(role, filename, key, model, prompt, structured=False):
-    response = call_ai(key, model, prompt)
-    value = parse_json(response) if structured else response
+    if structured:
+        # Request a JSON response from the API rather than hoping ordinary prose is JSON.
+        response = call_ai(key, model, prompt +
+                           '\nReturn exactly one JSON object, with properly escaped strings; no markdown fences.')
+        try:
+            value = parse_json(response)
+        except (json.JSONDecodeError, ValueError) as first_error:
+            # Preserve a diagnostic copy without approving or publishing the content.
+            save(filename + '_parse_failure', {
+                'status': 'UNPARSEABLE_MODEL_OUTPUT', 'role': role,
+                'timestamp_utc': now(), 'error_type': type(first_error).__name__,
+                'error_message': str(first_error)[:300],
+                'raw_model_output': response[:30000],
+                'human_approved': False, 'x_posted': False})
+            print(f'{role}: malformed JSON; retrying one generation', file=sys.stderr)
+            response = call_ai(key, model,
+                prompt + '\nIMPORTANT: Your prior response could not be parsed as JSON. '
+                'Return ONLY a single valid JSON object. Escape all line breaks within '
+                'string values as \\n and all quotation marks within strings as \\". '
+                'Do not use markdown code fences.')
+            value = parse_json(response)
+    else:
+        value = call_ai(key, model, prompt)
     record = {'status': 'AI_EXECUTED', 'role': role, 'account_scope': ACCOUNT,
               'model': model, 'timestamp_utc': now(), 'input_source': 'PREVIOUS_STEP_OUTPUT',
               'upstream_generated_in_same_run': True, 'external_web_checked': False,
