@@ -1,0 +1,38 @@
+name: AI Employee Operations Plan Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      case_title:
+        description: 'Public test topic only (no secrets or private drafts)'
+        required: true
+        default: 'ChatGPTとGeminiの使い分け'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  operations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run operations planner
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-2.5-flash
+          CASE_TITLE: ${{ inputs.case_title }}
+        run: python scripts/operate.py
+      - name: Save operations result
+        uses: actions/upload-artifact@v4
+        with:
+          name: operations-plan-result
+          path: operations_result.json
+          retention-days: 7
+          if-no-files-found: error
