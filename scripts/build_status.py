@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 RESULT_DIR = Path('pipeline_results')
-ROLE_FILES = ['00_status', '01_plan', '02_research_plan', '03_drafts', '04_audit', '05_operations', '06_analytics']
+ROLE_FILES = ['00_status', '01_plan', '02_research_plan', '03_drafts', '04_audit', '04_audit_2', '04_audit_3', '05_operations', '06_analytics']
 ALLOWED_STATES = {'COMPLETED_PENDING_HUMAN_REVIEW', 'FAILED_PARTIAL'}
 ALLOWED_ROLES = {'企画AI', '調査AI', '制作AI', '監査AI', '運用AI（状態記録のみ）'}
 
