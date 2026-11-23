@@ -1,0 +1,39 @@
+name: AI Employee Chain Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: 'Experiment topic (public-safe text only)'
+        required: true
+        default: 'ChatGPTとGeminiの使い分け'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  chain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: gemini-3.5-flash-lite
+      TOPIC: ${{ inputs.topic }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run chained AI tasks
+        run: python scripts/pipeline.py
+      - name: Save results including partial failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-chain-result
+          path: pipeline_results/
+          retention-days: 7
+          if-no-files-found: warn
