@@ -8,6 +8,7 @@ import datetime
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -35,21 +36,35 @@ def main():
 外部Web調査・X接続・投稿・承認は実施しません。'''
     payload = {'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'temperature': 0.2}}
     url = f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-        headers={'Content-Type': 'application/json', 'x-goog-api-key': api_key},
-        method='POST',
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as res:
-            response = json.load(res)
-    except urllib.error.HTTPError as exc:
-        print(f'Gemini API error HTTP {exc.code}', file=sys.stderr)
-        sys.exit(1)
-    except Exception as exc:
-        print('Gemini API request failed:', type(exc).__name__, file=sys.stderr)
-        sys.exit(1)
+    # Temporary Gemini overloads can return 429, 500, 502, 503, or 504.
+    # Retry only these transient errors, with a short capped backoff.
+    retryable_statuses = {429, 500, 502, 503, 504}
+    backoff_seconds = (0, 2, 4, 8)  # Maximum four attempts total.
+    response = None
+    for attempt, delay in enumerate(backoff_seconds, start=1):
+        if delay:
+            print(f'Retrying Gemini request after {delay}s (attempt {attempt}/4).', flush=True)
+            time.sleep(delay)
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            headers={'Content-Type': 'application/json', 'x-goog-api-key': api_key},
+            method='POST',
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as res:
+                response = json.load(res)
+            break
+        except urllib.error.HTTPError as exc:
+            # Avoid logging API request headers or secrets.
+            print(f'Gemini API error HTTP {exc.code} on attempt {attempt}/4.', file=sys.stderr, flush=True)
+            if exc.code not in retryable_statuses or attempt == len(backoff_seconds):
+                sys.exit('Gemini request failed; no operations_result.json was created.')
+        except Exception as exc:
+            print('Gemini API request failed:', type(exc).__name__, file=sys.stderr)
+            sys.exit(1)
+    if response is None:
+        sys.exit('Gemini did not return a response.')
 
     candidates = response.get('candidates', [])
     if not candidates:
