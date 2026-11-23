@@ -114,6 +114,17 @@ def invoke(role, filename, key, model, prompt, structured=False):
     return record
 
 
+def normalize_draft(text):
+    """Strip only an accidental leading experiment-account mention; keep an audit trail."""
+    pattern = rf'^\s*{re.escape(ACCOUNT)}(?=\s|$)\s*'
+    normalized = re.sub(pattern, '', text, count=1, flags=re.IGNORECASE)
+    return normalized.strip(), normalized != text
+
+
+def detect_leading_handle(text):
+    return bool(re.match(r'^\s*@\w+', text))
+
+
 def run():
     key = os.environ.get('GEMINI_API_KEY', '').strip()
     model = os.environ.get('GEMINI_MODEL', 'gemini-3.5-flash-lite').strip()
@@ -125,10 +136,10 @@ def run():
     if not (4 <= len(topic) <= 150):
         raise ValueError('TOPIC must be 4–150 characters')
 
-    summary = {'schema_version': '0.1', 'run_status': 'IN_PROGRESS', 'started_utc': now(),
+    summary = {'schema_version': '0.9', 'run_status': 'IN_PROGRESS', 'started_utc': now(),
                'account_scope': ACCOUNT, 'topic': topic, 'model': model,
                'verified_web_sources': False, 'x_connected': False, 'x_posted': False,
-               'human_approved': False, 'simulated': False, 'completed_roles': [],
+               'human_approved': False, 'simulated': False, 'topic_input_source': 'GITHUB_ACTIONS_WORKFLOW_DISPATCH', 'topic_exact': topic, 'completed_roles': [],
                'pending_roles': ['企画AI', '調査AI', '制作AI', '監査AI', '運用AI', '分析AI'],
                'notes': 'Gemini execution is real; output is unverified. Never infer approval.'}
     save('00_status', summary)
@@ -145,11 +156,13 @@ def run():
         summary['completed_roles'].append('調査AI')
 
         creation = invoke('制作AI', '03_drafts', key, model,
-            '以下の企画と調査計画を踏まえ、実験予定を紹介するX投稿下書きを3案作成。'
+            f'依頼テーマ（最優先）: {topic}\n以下の企画と調査計画を踏まえ、依頼テーマから逸脱しない実験予定のX投稿下書きを3案作成。'
             '実測・調査済みと誤認させない。JSONだけを返す。形式は '
             '{"drafts":[{"type":"実験予告","text":"..."},'
             '{"type":"手順共有","text":"..."},{"type":"読者への質問","text":"..."}] }。'
             '各textは日本語140文字以内を目標にし、性能比較の結果を断定しない。'
+            '投稿本文には実験アカウント名 @FX_Civilservant を書かないこと。投稿文の先頭に@メンションを付けない。'
+            '依頼テーマに一致しない内容は出さない。' 
             '\n<plan>\n' + str(plan['result'])[:9000] + '\n</plan>'
             '\n<research_plan>\n' + str(research['result'])[:10000] + '\n</research_plan>', structured=True)
         drafts = creation['result'].get('drafts')
@@ -158,9 +171,22 @@ def run():
         for i, draft in enumerate(drafts):
             if not isinstance(draft, dict) or not isinstance(draft.get('text'), str) or not draft['text'].strip():
                 raise ValueError(f'Draft {i+1} has no valid text')
+            original = draft['text']
+            normalized, removed = normalize_draft(original)
+            draft['text'] = normalized
+            draft['leading_account_handle_removed'] = removed
+            draft['leading_mention_remaining'] = detect_leading_handle(normalized)
+            draft['manual_topic_alignment_check_required'] = True
+            if removed:
+                draft['normalization_note'] = 'Leading experiment-account mention removed before auditing.'
+            if not normalized:
+                raise ValueError(f'Draft {i+1} empty after normalization')
             draft['unicode_codepoints'] = len(draft['text'])
             draft['x_character_limit_verified'] = False
             draft['human_approved'] = False
+        creation['requested_topic'] = topic
+        creation['topic_alignment_verified'] = False
+        creation['human_topic_review_required'] = True
         save('03_drafts', creation)
         summary['completed_roles'].append('制作AI')
 
@@ -170,10 +196,12 @@ def run():
             selected = draft['text']
             file_id = '04_audit' if i == 0 else f'04_audit_{i+1}'
             audit = invoke('監査AI', file_id, key, model,
-                '次の未承認X下書きを監査。①未検証の主張②誤情報リスク③誤解を招く表現'
+                f'依頼テーマ: {topic}\n次の未承認X下書きを監査。テーマからの逸脱も指摘すること。①未検証の主張②誤情報リスク③誤解を招く表現'
                 '④修正案⑤人間の確認項目。外部Web検証は未実施。結論は投稿許可ではない。'
                 '検証していない情報を事実と断定しない。'
                 '\n<draft_to_audit>\n' + selected[:5000] + '\n</draft_to_audit>')
+            audit['requested_topic'] = topic
+            audit['topic_alignment_verified'] = False
             audit['audited_draft_index'] = i
             audit['audited_draft_text'] = selected
             audit['all_drafts_audited'] = (i == len(drafts)-1)
@@ -202,6 +230,8 @@ def run():
         summary.update(run_status='COMPLETED_PENDING_HUMAN_REVIEW', finished_utc=now(),
                        pending_roles=['人間承認', '実測値に基づく分析'],
                        audited_drafts=len(drafts), total_drafts=len(drafts),
+                       topic_alignment_verified=False, human_topic_review_required=True,
+                       leading_mentions_remaining=sum(int(d['leading_mention_remaining']) for d in drafts),
                        notes='Six AI generations (plan, research, creation, three audits) in one run. Operations/status and analytics wait are deterministic records. No X posting.')
     except Exception as exc:
         summary.update(run_status='FAILED_PARTIAL', finished_utc=now(),
