@@ -1,4 +1,3 @@
-
 name: AI Employee Planner Test
 
 on:
@@ -20,8 +19,8 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Check Python
-        run: |
-          python --version
-          python -m py_compile scripts/plan.py
-          echo "Python syntax check passed"
+      - name: Run Gemini planner
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TOPIC: ChatGPTとGeminiの使い分け
+        run: python scripts/plan.py
