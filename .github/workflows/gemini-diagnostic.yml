@@ -1,0 +1,35 @@
+name: Gemini API Diagnostic
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Model to test (one short request; never enter API key)'
+        required: true
+        default: 'gemini-3.5-flash-lite'
+        type: string
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check Gemini API
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DIAG_MODEL: ${{ inputs.model }}
+        run: python scripts/diagnose_gemini.py
+      - name: Save safe diagnostic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemini-diagnostic-result
+          path: diagnostic_result.json
+          retention-days: 3
+          if-no-files-found: warn
