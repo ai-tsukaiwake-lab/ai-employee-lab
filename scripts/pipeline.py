@@ -164,17 +164,23 @@ def run():
         save('03_drafts', creation)
         summary['completed_roles'].append('制作AI')
 
-        # Audit the exact generated draft, rather than a manually supplied example.
-        selected = drafts[0]['text']
-        audit = invoke('監査AI', '04_audit', key, model,
-            '次の未承認下書きを監査。①未検証の主張②誤情報リスク③誤解を招く表現'
-            '④修正案⑤人間の確認項目。外部Web検証は未実施。結論は投稿許可ではない。'
-            '\n<draft_to_audit>\n' + selected[:5000] + '\n</draft_to_audit>')
-        audit['audited_draft_index'] = 0
-        audit['audited_draft_text'] = selected
-        audit['all_drafts_audited'] = False
-        audit['x_character_limit_verified'] = False
-        save('04_audit', audit)
+        # Audit each exact draft separately; save partial successes before moving on.
+        # Audits are advisory only: no external fact checking or human approval.
+        for i, draft in enumerate(drafts):
+            selected = draft['text']
+            file_id = '04_audit' if i == 0 else f'04_audit_{i+1}'
+            audit = invoke('監査AI', file_id, key, model,
+                '次の未承認X下書きを監査。①未検証の主張②誤情報リスク③誤解を招く表現'
+                '④修正案⑤人間の確認項目。外部Web検証は未実施。結論は投稿許可ではない。'
+                '検証していない情報を事実と断定しない。'
+                '\n<draft_to_audit>\n' + selected[:5000] + '\n</draft_to_audit>')
+            audit['audited_draft_index'] = i
+            audit['audited_draft_text'] = selected
+            audit['all_drafts_audited'] = (i == len(drafts)-1)
+            audit['x_character_limit_verified'] = False
+            save(file_id, audit)
+            summary['audited_drafts'] = i + 1
+            save('00_status', summary)
         summary['completed_roles'].append('監査AI')
 
         # Operations is a factual status snapshot; no additional Gemini call needed.
@@ -182,7 +188,7 @@ def run():
                       'timestamp_utc': now(), 'upstream_generated_in_same_run': True,
                       'ai_generation_executed_this_step': False,
                       'completed': ['企画AI', '調査AI', '制作AI', '監査AI'],
-                      'pending': ['残り2案の監査', '人間による内容確認・承認', '実測データを使う分析'],
+                      'pending': ['人間による内容確認・承認', '実測データを使う分析'],
                       'external_web_checked': False, 'human_approved': False,
                       'x_connected': False, 'x_posted': False,
                       'next_action': '成果物を確認。追加監査と実測比較を行うまで投稿しない。'}
@@ -194,9 +200,9 @@ def run():
                               'x_connected': False, 'x_posted': False,
                               'reason': 'No actual X post metrics provided'})
         summary.update(run_status='COMPLETED_PENDING_HUMAN_REVIEW', finished_utc=now(),
-                       pending_roles=['残り2案の監査', '人間承認', '実測値に基づく分析'],
-                       audited_drafts=1, total_drafts=3,
-                       notes='4 AI generations in one run. Operations/status and analytics wait are deterministic records, not AI inference. No X posting.')
+                       pending_roles=['人間承認', '実測値に基づく分析'],
+                       audited_drafts=len(drafts), total_drafts=len(drafts),
+                       notes='Six AI generations (plan, research, creation, three audits) in one run. Operations/status and analytics wait are deterministic records. No X posting.')
     except Exception as exc:
         summary.update(run_status='FAILED_PARTIAL', finished_utc=now(),
                        error_type=type(exc).__name__,
