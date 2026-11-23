@@ -25,3 +25,12 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TOPIC: ChatGPTとGeminiの使い分け
         run: python scripts/plan.py
+      
+      - name: Save planner result
+        uses: actions/upload-artifact@v4
+        with:
+          name: planner-result
+          path: plan_result.json
+          retention-days: 7
+          if-no-files-found: error
+
