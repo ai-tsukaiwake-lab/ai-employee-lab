@@ -132,6 +132,34 @@ def detect_leading_handle(text):
     return bool(re.match(r'^\s*@\w+', text))
 
 
+def advisory_quality_checks(text, draft_type, topic):
+    """Conservative, local preflight: flags only, never approves or fact-checks."""
+    length = len(text)
+    flags = []
+    if length > 140:
+        flags.append('OVER_140_UNICODE_CODEPOINTS')
+    if detect_leading_handle(text):
+        flags.append('LEADING_MENTION')
+    unsupported = ('検証の結果', '実験した結果', '実証済み', '必ず向上', '圧倒的に優秀',
+                   '100%正確', '調査によると', 'データで証明', '最も優秀')
+    if any(phrase in text for phrase in unsupported):
+        flags.append('POSSIBLE_UNVERIFIED_CLAIM_REVIEW')
+    # These are only editorial heuristics, not proof of topical relevance.
+    if not any(term in text for term in ('比較', '同じ', '条件', '手順', '質問', '使い分け', '検証', '要約')):
+        flags.append('MAY_LACK_TESTABLE_SPECIFICS')
+    if len(text) < 35:
+        flags.append('POSSIBLY_TOO_SHORT_TO_BE_USEFUL')
+    if draft_type == '読者への質問' and '？' not in text and '?' not in text:
+        flags.append('QUESTION_WITHOUT_QUESTION_MARK')
+    return {'unicode_codepoints': length,
+            'unicode_140_target_met': length <= 140,
+            'x_weighted_character_count_verified': False,
+            'factual_claims_verified': False,
+            'topic_alignment_verified': False,
+            'manual_review_required': True,
+            'warning_codes': flags}
+
+
 def run():
     key = os.environ.get('GEMINI_API_KEY', '').strip()
     model = os.environ.get('GEMINI_MODEL', 'gemini-3.5-flash-lite').strip()
@@ -143,7 +171,7 @@ def run():
     if not (4 <= len(topic) <= 150):
         raise ValueError('TOPIC must be 4–150 characters')
 
-    summary = {'schema_version': '1.1', 'run_status': 'IN_PROGRESS', 'started_utc': now(),
+    summary = {'schema_version': '1.2', 'run_status': 'IN_PROGRESS', 'started_utc': now(),
                'account_scope': ACCOUNT, 'topic': topic, 'model': model,
                'verified_web_sources': False, 'x_connected': False, 'x_posted': False,
                'human_approved': False, 'simulated': False, 'topic_input_source': 'GITHUB_ACTIONS_WORKFLOW_DISPATCH', 'topic_exact': topic, 'completed_roles': [],
@@ -183,6 +211,10 @@ def run():
             '{"drafts":[{"type":"実験予告","text":"..."},'
             '{"type":"手順共有","text":"..."},{"type":"読者への質問","text":"..."}] }。'
             '各textは日本語140文字以内を目標にし、性能比較の結果を断定しない。'
+            '3案はそれぞれ役割を変える。実験予告には目的と比べる観点、手順共有には再現可能な入力条件と記録内容、'
+            '読者への質問には具体的に答えやすい質問を入れる。使い分けの結論を未実験の段階で作らない。'
+            '未検証の成功率・性能差・架空の参照データを記載しない。'
+            '比較結果が未取得なら「予定」「準備中」等を使って公開可能な事実と区別する。'
             '投稿本文には実験アカウント名 @FX_Civilservant を書かないこと。投稿文の先頭に@メンションを付けない。'
             '依頼テーマに一致しない内容は出さない。' 
             '\n<plan>\n' + str(plan['result'])[:9000] + '\n</plan>'
@@ -204,6 +236,7 @@ def run():
             if not normalized:
                 raise ValueError(f'Draft {i+1} empty after normalization')
             draft['unicode_codepoints'] = len(draft['text'])
+            draft['quality_preflight'] = advisory_quality_checks(draft['text'], draft.get('type', ''), topic)
             draft['x_character_limit_verified'] = False
             draft['human_approved'] = False
         creation['requested_topic'] = topic
@@ -222,8 +255,13 @@ def run():
                 f'依頼テーマ: {topic}\n次の未承認X下書きを監査。テーマからの逸脱も指摘すること。①未検証の主張②誤情報リスク③誤解を招く表現'
                 '④修正案⑤人間の確認項目。外部Web検証は未実施。結論は投稿許可ではない。'
                 '検証していない情報を事実と断定しない。'
+                '必ず、①テーマとの関連性②再現に必要な具体的な条件③未取得の結果を既成事実にしていないか'
+                '④根拠の必要な主張⑤読者が得られる価値⑥140 Unicode文字目標を評価する。'
+                '判定が難しい項目は未確認と明記。Xの独自文字数判定を実施済みと主張しない。'
                 '\n<draft_to_audit>\n' + selected[:5000] + '\n</draft_to_audit>', on_retry=on_retry)
             audit['requested_topic'] = topic
+            audit['quality_preflight'] = draft['quality_preflight']
+            audit['human_fact_check_required'] = True
             audit['topic_alignment_verified'] = False
             audit['audited_draft_index'] = i
             audit['audited_draft_text'] = selected
@@ -258,6 +296,8 @@ def run():
                        audited_drafts=len(drafts), total_drafts=len(drafts),
                        topic_alignment_verified=False, human_topic_review_required=True,
                        leading_mentions_remaining=sum(int(d['leading_mention_remaining']) for d in drafts),
+                       quality_preflight_warning_count=sum(len(d['quality_preflight']['warning_codes']) for d in drafts),
+                       quality_preflight_status='ADVISORY_ONLY_NOT_APPROVAL',
                        notes='Six AI generations (plan, research, creation, three audits) in one run. Operations/status and analytics wait are deterministic records. No X posting.')
     except Exception as exc:
         summary.update(run_status='FAILED_PARTIAL', finished_utc=now(),
