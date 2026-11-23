@@ -10,7 +10,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   chain:
@@ -29,6 +29,9 @@ jobs:
           python-version: '3.11'
       - name: Run chained AI tasks
         run: python scripts/pipeline.py
+      - name: Build public status and private bundle
+        if: always()
+        run: python scripts/build_status.py
       - name: Save results including partial failures
         if: always()
         uses: actions/upload-artifact@v4
@@ -37,3 +40,13 @@ jobs:
           path: pipeline_results/
           retention-days: 7
           if-no-files-found: warn
+      - name: Publish public metadata only (never drafts)
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- public-status.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update public AI workflow status"
+            git push origin HEAD:main
+          fi
