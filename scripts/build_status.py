@@ -39,7 +39,7 @@ def main():
     }
     Path('public-status.json').write_text(json.dumps(public, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     # This never enters the repository; only uploaded as an Actions artifact.
-    bundle = {'schema':'private-bundle-v1', 'files':{}}
+    bundle = {'schema':'private-bundle-v1', 'run_id': str(os.environ.get('GITHUB_RUN_ID', 'unknown'))[:24], 'files':{}}
     for key in ROLE_FILES:
         item = read(key)
         if item is not None:
