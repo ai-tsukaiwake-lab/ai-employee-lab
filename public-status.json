@@ -1,11 +1,11 @@
 {
   "schema": "public-status-v1",
-  "run_id": "45182181447",
+  "run_id": "45184203682",
   "run_status": "FAILED_PARTIAL",
-  "roles_completed": 3,
+  "roles_completed": 0,
   "total_roles": 6,
   "draft_count": 0,
-  "audited_count": 1,
+  "audited_count": 0,
   "human_approval": "NOT_GRANTED",
   "x_posting": "DISABLED",
   "details_public": false
