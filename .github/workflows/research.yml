@@ -1,0 +1,35 @@
+name: AI Employee Research Plan Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run research planner
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-3.5-flash-lite
+          TOPIC: ChatGPTとGeminiの使い分け
+        run: python scripts/research.py
+
+      - name: Save research plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-plan-result
+          path: research_result.json
+          retention-days: 7
+          if-no-files-found: error
