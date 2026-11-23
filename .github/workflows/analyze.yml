@@ -1,0 +1,45 @@
+name: AI Employee Analytics Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      case_title:
+        description: 'Analysis topic (experiment only)'
+        required: true
+        default: 'ChatGPTとGeminiの使い分け'
+        type: string
+      metrics_json:
+        description: 'Optional JSON array of manually observed X metrics; blank = no data'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  analytics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Analyze manual metrics
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-3.5-flash-lite
+          CASE_TITLE: ${{ inputs.case_title }}
+          METRICS_JSON: ${{ inputs.metrics_json }}
+        run: python scripts/analyze.py
+      - name: Save analytics result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analytics-result
+          path: analysis_result.json
+          retention-days: 7
+          if-no-files-found: error
