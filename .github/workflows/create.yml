@@ -1,0 +1,41 @@
+name: AI Employee Creation Draft Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: 'Topic for draft (no X posting)'
+        required: false
+        default: 'ChatGPTとGeminiの使い分け'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run creation AI
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-3.5-flash-lite
+          TOPIC: ${{ inputs.topic }}
+        run: python scripts/create.py
+
+      - name: Save creation draft
+        uses: actions/upload-artifact@v4
+        with:
+          name: creation-draft-result
+          path: creation_result.json
+          retention-days: 7
+          if-no-files-found: error
