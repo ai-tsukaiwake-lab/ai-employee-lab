@@ -1,0 +1,145 @@
+name: Import private AI comparison
+on:
+  workflow_dispatch:
+    inputs:
+      evaluate:
+        description: 'Optional Gemini evaluation; confirmed free quota only'
+        type: boolean
+        default: false
+      human_minutes:
+        description: 'Actual human work minutes (blank if unknown)'
+        type: string
+        default: ''
+      human_actions:
+        description: 'Actual human action count (blank if unknown)'
+        type: string
+        default: ''
+permissions:
+  contents: write
+concurrency:
+  group: private-comparison
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate comparison input
+        run: python scripts/comparison.py config/comparison_input.json comparison_result.json
+      - name: Optional advisory evaluation
+        env:
+          COMPARISON_EVALUATION_ENABLED: ${{ inputs.evaluate && vars.COMPARISON_FREE_QUOTA_CONFIRMED == 'true' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          from comparison_evaluate import evaluate, call_gemini
+          d=json.loads(Path('comparison_result.json').read_text())
+          mock='模擬' in d['prompt'] or '動作検証専用' in d['prompt'] or any('模擬' in str(r['model']) or '【模擬回答】' in r['answer'] for r in d['responses'])
+          result={'status':'test_only' if mock else 'disabled','scores':None}
+          if not mock and os.getenv('COMPARISON_EVALUATION_ENABLED')=='true':
+              try: result=evaluate(d,call_gemini)
+              except Exception as e: result={'status':'evaluation_failed','scores':None,'error_type':type(e).__name__}
+          Path('comparison_evaluation.json').write_text(json.dumps(result,ensure_ascii=False),encoding='utf-8')
+          PY
+      - name: Generate evidence-bound drafts
+        run: python scripts/comparison_draft.py
+      - name: Review comparison drafts
+        run: python scripts/comparison_review.py
+      - name: Record progress and human work
+        env:
+          HUMAN_MINUTES: ${{ inputs.human_minutes }}
+          HUMAN_ACTIONS: ${{ inputs.human_actions }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          def read(n): return json.loads(Path(n+'.json').read_text(encoding='utf-8'))
+          def metric(key):
+              v=os.getenv(key,'').strip()
+              if not v: return None
+              if not v.isascii() or not v.isdecimal() or len(v)>6: raise ValueError(key)
+              return int(v)
+          d=read('comparison_result'); e=read('comparison_evaluation'); draft=read('comparison_draft'); review=read('comparison_review')
+          mock=e['status']=='test_only'
+          if mock:
+              draft.update(status='test_only',x_draft=None,note_draft=None)
+              Path('comparison_draft.json').write_text(json.dumps(draft,ensure_ascii=False),encoding='utf-8')
+          missing=d['missing']
+          tasks=[] if mock else [{'action':'共通プロンプトで回答を取得','provider':p} for p in missing]
+          if not mock and not missing: tasks.append({'action':'回答の事実確認・原稿の人間確認'})
+          report={'run_id':os.getenv('GITHUB_RUN_ID'),'case_id':d['prompt_sha256'],'status':'test_only' if mock else ('awaiting_responses' if missing else 'human_review'),'missing':missing,'human_tasks':tasks,'human_minutes':metric('HUMAN_MINUTES'),'human_actions':metric('HUMAN_ACTIONS'),'evaluation_status':e['status'],'quality_issues':review['issues'],'ceo_ai_review':'not_executed','approved':False,'posted':False}
+          Path('comparison_progress.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+          PY
+      - name: Build private management summary
+        run: |
+          python - <<'PYCODE'
+          import json, html
+          from pathlib import Path
+          p=json.loads(Path('comparison_progress.json').read_text(encoding='utf-8'))
+          fields={'状態':p['status'],'未取得':p['missing'],'人間への依頼':p['human_tasks'],'作業時間（分）':p['human_minutes'],'操作回数':p['human_actions'],'評価状態':p['evaluation_status'],'品質上の課題':p['quality_issues'],'AI社長評価':'未実施','公開承認':False,'投稿済み':False}
+          body=''.join('<dt>'+html.escape(k)+'</dt><dd>'+html.escape('未記録' if v is None else json.dumps(v,ensure_ascii=False))+'</dd>' for k,v in fields.items())
+          Path('comparison_management.html').write_text('<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>比較実験管理</title><style>body{font:16px system-ui;margin:24px;max-width:800px}dt{font-weight:bold;margin-top:16px}dd{margin:4px 0;overflow-wrap:anywhere}</style><h1>比較実験管理（非公開）</h1><p>実測の事実確認・AI社長評価は未実施。公開不可。</p><dl>'+body+'</dl></html>',encoding='utf-8')
+          PYCODE
+      - name: Prepare CEO handoff and human action summary
+        run: |
+          python - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          p=json.loads(Path('comparison_progress.json').read_text(encoding='utf-8'))
+          tasks=p['human_tasks'] if p['status']!='test_only' else []
+          h={'case_id':p['case_id'],'run_id':p['run_id'],'status':p['status'],'human_tasks':tasks,'human_minutes':p['human_minutes'],'human_actions':p['human_actions'],'quality_issues':p['quality_issues'],'evaluation_status':p['evaluation_status'],'ceo_ai_review':'not_executed','approved':False,'posted':False}
+          Path('comparison_ceo_handoff.json').write_text(json.dumps(h,ensure_ascii=False,indent=2),encoding='utf-8')
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as f:
+              f.write('## 比較実験：人間への依頼\n')
+              f.write('検証専用・対応不要\n' if p['status']=='test_only' else ('未取得回答：'+str(len(p['missing']))+'件\n' if p['missing'] else '事実確認・原稿確認が必要\n'))
+          PYCODE
+      - name: Persist comparison progress
+        run: |
+          python - <<'PYCODE'
+          import json, re
+          from pathlib import Path
+          p=json.loads(Path('comparison_progress.json').read_text())
+          if p['status']=='test_only': raise SystemExit(0)
+          path=Path('config/comparison_progress_history.json')
+          ledger=json.loads(path.read_text()) if path.exists() else {'schema':1,'runs':{}}
+          if ledger['schema']!=1 or not isinstance(ledger['runs'],dict): raise ValueError('ledger schema')
+          if not re.fullmatch(r'[0-9]+',p['run_id']) or not re.fullmatch(r'[a-f0-9]{64}',p['case_id']): raise ValueError('identity')
+          runs=ledger['runs']
+          old=runs.get(p['run_id'])
+          if old and old['case_id']!=p['case_id']: raise ValueError('run identity changed')
+          runs[p['run_id']]={k:p[k] for k in ('case_id','status','missing','human_minutes','human_actions')}
+          path.write_text(json.dumps(ledger,ensure_ascii=False,indent=2)+'\n')
+          totals={k:{'known_total':sum(r[k] for r in runs.values() if r[k] is not None),'unknown_runs':sum(r[k] is None for r in runs.values())} for k in ('human_minutes','human_actions')}
+          Path('comparison_totals.json').write_text(json.dumps(totals,ensure_ascii=False,indent=2))
+          PYCODE
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if [ -f config/comparison_progress_history.json ]; then
+            git add config/comparison_progress_history.json
+            if ! git diff --cached --quiet; then
+              git commit -m 'Record private comparison progress'
+              git pull --rebase origin main
+              git push origin HEAD:main
+            fi
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: private-comparison
+          path: |
+            comparison_result.json
+            comparison_evaluation.json
+            comparison_draft.json
+            comparison_review.json
+            comparison_progress.json
+            comparison_totals.json
+            comparison_management.html
+            comparison_ceo_handoff.json
+          retention-days: 7
